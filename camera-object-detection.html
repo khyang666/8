@@ -1,0 +1,515 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>物品识别测试工具</title>
+  <!-- 添加Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- 添加Font Awesome -->
+  <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
+  <!-- 添加TensorFlow.js -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@2.0.0/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.2/dist/coco-ssd.min.js"></script>
+  
+  <script>
+    // Tailwind配置
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            primary: '#4F46E5',
+            secondary: '#10B981',
+            accent: '#F59E0B',
+            neutral: '#1F2937',
+          },
+          fontFamily: {
+            sans: ['Inter', 'system-ui', 'sans-serif'],
+          },
+        },
+      }
+    }
+  </script>
+  
+  <style type="text/tailwindcss">
+    @layer utilities {
+      .content-auto {
+        content-visibility: auto;
+      }
+      .camera-container {
+        @apply relative w-full max-w-2xl mx-auto overflow-hidden;
+      }
+      .detection-box {
+        @apply absolute border-2 border-accent rounded-md bg-accent/20;
+      }
+      .btn-primary {
+        @apply bg-primary hover:bg-primary/90 text-white font-medium py-2 px-4 rounded-lg transition-all duration-200 transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-primary/50;
+      }
+      .btn-secondary {
+        @apply bg-secondary hover:bg-secondary/90 text-white font-medium py-2 px-4 rounded-lg transition-all duration-200 transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-secondary/50;
+      }
+      .btn-danger {
+        @apply bg-red-500 hover:bg-red-600 text-white font-medium py-2 px-4 rounded-lg transition-all duration-200 transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-red-400/50;
+      }
+      .card {
+        @apply bg-white rounded-xl shadow-lg p-6 mb-6 transition-all duration-300 hover:shadow-xl;
+      }
+      .object-item {
+        @apply flex items-center justify-between p-3 border-b border-gray-100 hover:bg-gray-50;
+      }
+      .action-item {
+        @apply flex items-center justify-between p-3 border-b border-gray-100 hover:bg-gray-50;
+      }
+    }
+  </style>
+</head>
+<body class="bg-gray-50 min-h-screen font-sans">
+  <div class="container mx-auto px-4 py-8 max-w-6xl">
+    <header class="mb-8 text-center">
+      <h1 class="text-[clamp(1.8rem,4vw,2.5rem)] font-bold text-neutral mb-2">物品识别测试工具</h1>
+      <p class="text-gray-600">使用摄像头识别特定物品并触发操作</p>
+    </header>
+    
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+      <!-- 物品识别卡片 -->
+      <div class="card">
+        <h2 class="text-xl font-semibold text-neutral mb-4 flex items-center">
+          <i class="fa fa-camera mr-2 text-primary"></i>
+          物品识别
+        </h2>
+        
+        <div class="space-y-4">
+          <div class="camera-container aspect-video bg-gray-100 rounded-lg overflow-hidden">
+            <video id="video" class="w-full h-full object-cover" autoplay muted playsinline></video>
+            <div id="detectionOverlay" class="absolute inset-0 pointer-events-none"></div>
+          </div>
+          
+          <div class="flex justify-between">
+            <button id="startCamera" class="btn-primary">
+              <i class="fa fa-play mr-2"></i>启动摄像头
+            </button>
+            <button id="stopCamera" class="btn-primary bg-gray-500 hover:bg-gray-600" disabled>
+              <i class="fa fa-stop mr-2"></i>停止摄像头
+            </button>
+          </div>
+          
+          <div class="grid grid-cols-2 gap-3">
+            <div class="p-3 bg-gray-50 rounded-lg border border-gray-200">
+              <h3 class="font-medium text-gray-700 mb-1">识别阈值</h3>
+              <input type="range" id="confidenceThreshold" min="0.1" max="0.9" step="0.1" value="0.6"
+                    class="w-full accent-primary">
+              <div class="flex justify-between text-xs text-gray-500 mt-1">
+                <span>低</span>
+                <span>高</span>
+              </div>
+            </div>
+            
+            <div class="p-3 bg-gray-50 rounded-lg border border-gray-200">
+              <h3 class="font-medium text-gray-700 mb-1">识别间隔(ms)</h3>
+              <input type="number" id="detectionInterval" min="100" max="2000" step="100" value="500"
+                    class="w-full p-2 border border-gray-300 rounded-lg">
+            </div>
+          </div>
+          
+          <div>
+            <div class="bg-gray-50 p-4 rounded-lg min-h-[100px] border border-gray-200">
+              <pre id="detectionOutput" class="text-gray-700 whitespace-pre-wrap">请启动摄像头开始识别...</pre>
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <!-- 物品与操作管理卡片 -->
+      <div class="card">
+        <h2 class="text-xl font-semibold text-neutral mb-4 flex items-center">
+          <i class="fa fa-cubes mr-2 text-primary"></i>
+          物品与操作管理
+        </h2>
+        
+        <div class="space-y-6">
+          <!-- 添加物品与操作部分 -->
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <!-- 添加物品 -->
+            <div class="bg-gray-50 p-5 rounded-lg border border-gray-200">
+              <h3 class="font-medium text-gray-700 mb-3 flex items-center">
+                <i class="fa fa-plus-circle mr-2 text-primary"></i>添加识别物品
+              </h3>
+              
+              <div class="space-y-3">
+                <div>
+                  <label class="block text-sm font-medium text-gray-700 mb-1">选择物品类型</label>
+                  <select id="newObjectName" class="w-full p-2 border border-gray-300 rounded-lg">
+                    <option value="person">人</option>
+                    <option value="book">书</option>
+                    <option value="cell phone">手机</option>
+                    <option value="keyboard">键盘</option>
+                    <option value="mouse">鼠标</option>
+                    <option value="laptop">笔记本电脑</option>
+                    <option value="cup">杯子</option>
+                    <option value="bottle">瓶子</option>
+                    <option value="apple">苹果</option>
+                    <option value="banana">香蕉</option>
+                    <option value="remote">遥控器</option>
+                    <option value="scissors">剪刀</option>
+                    <option value="toothbrush">牙刷</option>
+                    <option value="custom">自定义...</option>
+                  </select>
+                </div>
+                
+                <div id="customObjectContainer" class="hidden">
+                  <label class="block text-sm font-medium text-gray-700 mb-1">自定义物品名称</label>
+                  <input type="text" id="customObjectName" placeholder="输入自定义物品名称" 
+                        class="w-full p-2 border border-gray-300 rounded-lg">
+                </div>
+                
+                <div>
+                  <label class="block text-sm font-medium text-gray-700 mb-1">触发操作</label>
+                  <select id="newObjectAction" class="w-full p-2 border border-gray-300 rounded-lg">
+                    <option value="highlight">高亮显示</option>
+                    <option value="sound">播放声音</option>
+                    <option value="vibrate">震动设备</option>
+                    <option value="message">显示消息</option>
+                    <option value="url">打开URL</option>
+                  </select>
+                </div>
+                
+                <div id="actionValueContainer" class="hidden">
+                  <label class="block text-sm font-medium text-gray-700 mb-1">操作值</label>
+                  <input type="text" id="actionValue" placeholder="根据操作类型输入相应值" 
+                        class="w-full p-2 border border-gray-300 rounded-lg">
+                  <p class="text-xs text-gray-500 mt-1">
+                    提示：URL操作请输入网址，消息操作请输入要显示的消息内容
+                  </p>
+                </div>
+                
+                <button id="addNewObject" class="btn-primary w-full">
+                  <i class="fa fa-plus mr-2"></i>添加物品与操作
+                </button>
+              </div>
+            </div>
+            
+            <!-- 批量导入/导出 -->
+            <div class="bg-gray-50 p-5 rounded-lg border border-gray-200">
+              <h3 class="font-medium text-gray-700 mb-3 flex items-center">
+                <i class="fa fa-exchange mr-2 text-primary"></i>批量操作
+              </h3>
+              
+              <div class="space-y-3">
+                <button id="exportConfig" class="btn-primary w-full">
+                  <i class="fa fa-download mr-2"></i>导出配置
+                </button>
+                
+                <div class="flex flex-col gap-2">
+                  <label class="block text-sm font-medium text-gray-700 mb-1">导入配置文件</label>
+                  <input type="file" id="importConfig" accept=".json" class="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-primary file:text-white hover:file:bg-primary/90">
+                </div>
+                
+                <button id="clearAll" class="btn-danger w-full">
+                  <i class="fa fa-trash mr-2"></i>清空所有配置
+                </button>
+              </div>
+            </div>
+          </div>
+          
+          <!-- 已配置物品列表 -->
+          <div>
+            <div class="flex justify-between items-center mb-3">
+              <h3 class="font-medium text-gray-700">已配置的识别物品</h3>
+              <span id="objectsCount" class="text-sm bg-gray-100 text-gray-600 px-3 py-1 rounded-full">
+                0 个物品
+              </span>
+            </div>
+            
+            <div id="objectsList" class="border border-gray-200 rounded-lg overflow-hidden">
+              <div class="bg-gray-50 p-3 border-b border-gray-200">
+                <div class="grid grid-cols-6 font-medium text-gray-600">
+                  <div class="col-span-2">物品名称</div>
+                  <div class="col-span-2">触发操作</div>
+                  <div class="col-span-1 text-center">状态</div>
+                  <div class="col-span-1 text-center">操作</div>
+                </div>
+              </div>
+              <div id="objectsContainer" class="max-h-[400px] overflow-y-auto">
+                <!-- 物品列表将在这里动态生成 -->
+                <div class="text-center text-gray-500 py-10">
+                  暂无配置的物品，请添加
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- 系统设置卡片 -->
+    <div class="card">
+      <h2 class="text-xl font-semibold text-neutral mb-4 flex items-center">
+        <i class="fa fa-cog mr-2 text-primary"></i>
+        系统设置
+      </h2>
+      
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div class="bg-gray-50 p-5 rounded-lg border border-gray-200">
+          <h3 class="font-medium text-gray-700 mb-3">通用设置</h3>
+          
+          <div class="space-y-3">
+            <label class="flex items-center">
+              <input type="checkbox" id="autoStartDetection" class="mr-2 accent-primary" checked>
+              <span>摄像头启动后自动开始检测</span>
+            </label>
+            
+            <label class="flex items-center">
+              <input type="checkbox" id="continuousDetection" class="mr-2 accent-primary" checked>
+              <span>持续检测（不自动停止）</span>
+            </label>
+            
+            <label class="flex items-center">
+              <input type="checkbox" id="saveLastConfig" class="mr-2 accent-primary" checked>
+              <span>保存上次配置</span>
+            </label>
+          </div>
+        </div>
+        
+        <div class="bg-gray-50 p-5 rounded-lg border border-gray-200">
+          <h3 class="font-medium text-gray-700 mb-3">通知设置</h3>
+          
+          <div class="space-y-3">
+            <label class="flex items-center">
+              <input type="checkbox" id="showNotifications" class="mr-2 accent-primary" checked>
+              <span>显示系统通知</span>
+            </label>
+            
+            <label class="flex items-center">
+              <input type="checkbox" id="playSound" class="mr-2 accent-primary">
+              <span>检测到物品时播放提示音</span>
+            </label>
+            
+            <label class="flex items-center">
+              <input type="checkbox" id="vibrateDevice" class="mr-2 accent-primary">
+              <span>检测到物品时震动设备</span>
+            </label>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <footer class="mt-12 text-center text-gray-500 text-sm">
+      <p>物品识别测试工具 | 基于TensorFlow.js</p>
+    </footer>
+  </div>
+  
+  <!-- 通知组件 -->
+  <div id="notificationContainer" class="fixed bottom-4 right-4 z-50 max-w-sm"></div>
+  
+  <script>
+    // 全局变量
+    let model = null;
+    let videoStream = null;
+    let detectionInterval = null;
+    let objectsConfig = [];
+    let notificationId = 0;
+    
+    // DOM元素
+    const video = document.getElementById('video');
+    const detectionOverlay = document.getElementById('detectionOverlay');
+    const startCamera = document.getElementById('startCamera');
+    const stopCamera = document.getElementById('stopCamera');
+    const confidenceThreshold = document.getElementById('confidenceThreshold');
+    const detectionIntervalInput = document.getElementById('detectionInterval');
+    const detectionOutput = document.getElementById('detectionOutput');
+    const newObjectName = document.getElementById('newObjectName');
+    const customObjectContainer = document.getElementById('customObjectContainer');
+    const customObjectName = document.getElementById('customObjectName');
+    const newObjectAction = document.getElementById('newObjectAction');
+    const actionValueContainer = document.getElementById('actionValueContainer');
+    const actionValue = document.getElementById('actionValue');
+    const addNewObject = document.getElementById('addNewObject');
+    const objectsContainer = document.getElementById('objectsContainer');
+    const objectsCount = document.getElementById('objectsCount');
+    const exportConfig = document.getElementById('exportConfig');
+    const importConfig = document.getElementById('importConfig');
+    const clearAll = document.getElementById('clearAll');
+    const notificationContainer = document.getElementById('notificationContainer');
+    
+    // 初始化
+    function init() {
+      // 加载保存的配置
+      loadSavedConfig();
+      
+      // 加载模型
+      loadModel();
+      
+      // 绑定事件
+      bindEvents();
+      
+      // 更新物品列表显示
+      updateObjectsList();
+    }
+    
+    // 加载模型
+    async function loadModel() {
+      try {
+        detectionOutput.textContent = '正在加载识别模型...';
+        model = await cocoSsd.load();
+        detectionOutput.textContent = '模型加载完成，可以开始识别';
+        showNotification('成功', '模型加载完成', 'success');
+      } catch (error) {
+        detectionOutput.textContent = `加载模型失败: ${error.message}`;
+        console.error('模型加载错误:', error);
+        showNotification('错误', `模型加载失败: ${error.message}`, 'error');
+      }
+    }
+    
+    // 绑定事件
+    function bindEvents() {
+      // 摄像头控制
+      startCamera.addEventListener('click', startVideo);
+      stopCamera.addEventListener('click', stopVideo);
+      
+      // 物品配置
+      newObjectName.addEventListener('change', handleObjectNameChange);
+      newObjectAction.addEventListener('change', handleObjectActionChange);
+      addNewObject.addEventListener('click', handleAddNewObject);
+      
+      // 批量操作
+      exportConfig.addEventListener('click', exportConfigFile);
+      importConfig.addEventListener('change', handleImportConfig);
+      clearAll.addEventListener('click', clearAllConfig);
+      
+      // 其他事件
+      confidenceThreshold.addEventListener('input', updateDetectionSettings);
+      detectionIntervalInput.addEventListener('change', updateDetectionSettings);
+    }
+    
+    // 启动摄像头
+    async function startVideo() {
+      if (videoStream) return;
+      
+      try {
+        videoStream = await navigator.mediaDevices.getUserMedia({ 
+          video: { facingMode: 'environment' } 
+        });
+        video.srcObject = videoStream;
+        
+        startCamera.disabled = true;
+        stopCamera.disabled = false;
+        
+        // 如果启用了自动开始检测，则开始检测
+        if (document.getElementById('autoStartDetection').checked) {
+          startDetection();
+        }
+        
+        showNotification('成功', '摄像头已启动', 'success');
+      } catch (error) {
+        detectionOutput.textContent = `启动摄像头失败: ${error.message}`;
+        console.error('启动摄像头错误:', error);
+        showNotification('错误', `启动摄像头失败: ${error.message}`, 'error');
+      }
+    }
+    
+    // 停止摄像头
+    function stopVideo() {
+      if (!videoStream) return;
+      
+      videoStream.getTracks().forEach(track => track.stop());
+      videoStream = null;
+      video.srcObject = null;
+      
+      startCamera.disabled = false;
+      stopCamera.disabled = true;
+      
+      // 停止检测
+      if (detectionInterval) {
+        clearInterval(detectionInterval);
+        detectionInterval = null;
+      }
+      
+      showNotification('信息', '摄像头已停止', 'info');
+    }
+    
+    // 开始检测
+    function startDetection() {
+      if (detectionInterval) clearInterval(detectionInterval);
+      
+      detectionInterval = setInterval(async () => {
+        if (!model || !videoStream || video.paused) return;
+        
+        try {
+          // 执行物体检测
+          const predictions = await model.detect(video);
+          
+          // 清空之前的检测框
+          detectionOverlay.innerHTML = '';
+          
+          // 过滤符合条件的检测结果
+          const filteredPredictions = predictions.filter(prediction => 
+            prediction.score > parseFloat(confidenceThreshold.value)
+          );
+          
+          // 更新输出
+          let output = `检测到 ${filteredPredictions.length} 个物品:\n`;
+          let matchedObjects = [];
+          
+          filteredPredictions.forEach(prediction => {
+            const { bbox, class: className, score } = prediction;
+            const [x, y, width, height] = bbox;
+            
+            // 创建检测框
+            const box = document.createElement('div');
+            box.className = 'detection-box';
+            box.style.left = `${x}px`;
+            box.style.top = `${y}px`;
+            box.style.width = `${width}px`;
+            box.style.height = `${height}px`;
+            
+            // 创建标签
+            const label = document.createElement('div');
+            label.className = 'bg-accent text-white text-xs font-bold px-2 py-1 rounded';
+            label.textContent = `${className}: ${Math.round(score * 100)}%`;
+            box.appendChild(label);
+            
+            // 如果是目标物品，高亮显示
+            const objectConfig = objectsConfig.find(obj => obj.name === className);
+            if (objectConfig) {
+              box.classList.add('border-4', 'border-red-500', 'bg-red-100/50');
+              matchedObjects.push(objectConfig);
+              
+              // 执行触发操作
+              executeAction(objectConfig);
+            }
+            
+            detectionOverlay.appendChild(box);
+            
+            // 更新输出
+            output += `- ${className}: ${Math.round(score * 100)}%\n`;
+          });
+          
+          detectionOutput.textContent = output;
+          
+          // 如果未启用持续检测，且检测到了目标物品，则停止检测
+          if (!document.getElementById('continuousDetection').checked && matchedObjects.length > 0) {
+            clearInterval(detectionInterval);
+            detectionInterval = null;
+          }
+          
+        } catch (error) {
+          console.error('检测过程中出错:', error);
+          detectionOutput.textContent = '检测过程中出错，请重试';
+          showNotification('错误', '检测过程中出错', 'error');
+        }
+        
+      }, parseInt(detectionIntervalInput.value));
+    }
+    
+    // 执行触发操作
+    function executeAction(objectConfig) {
+      const { action, value } = objectConfig;
+      
+      // 通用通知
+      if (document.getElementById('showNotifications').checked) {
+        showNotification('识别成功', `检测到 ${objectConfig.name}`, 'success');
+      }
+      
+      // 播放声音
+      if (document.getElementById('playSound').checked || action === 'sound') {
+        const audio = new Audio('data:audio/wav;base64,UklGRigAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YYEAAAC/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/
